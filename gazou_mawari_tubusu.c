@@ -3,78 +3,134 @@
 #include <stdint.h>
 #include "image_io.h"
 
-int main(int argc, char* argv[]) {
-	image_t *img, *next_img, *tmp;
+typedef struct {
 	uint32_t x, y;
-	int progress, invalid_found;
+	rgb_t next_color;
+} work_t;
+
+int get_valid_colors(const image_t* img, rgb_t* average, uint32_t x, uint32_t y, int size) {
+	int count = 0, r = 0, g = 0, b = 0;
+	int dx, dy;
+	for (dy = -size; dy <= size; dy++) {
+		if ((dy < 0 && y < (unsigned int)-dy) || (img->height <= y + dy)) continue;
+		for (dx = -size; dx <= size; dx++) {
+			rgb_t px;
+			if ((dx < 0 && x < (unsigned int)-dx) || (img->width <= x + dx)) continue;
+			if ((px = img->image[(y + dy) * img->width + (x + dx)]).userdata) {
+				count++;
+				r += px.r;
+				g += px.g;
+				b += px.b;
+			}
+		}
+	}
+	if (average != NULL) {
+		if (count > 0) {
+			average->r = r / count;
+			average->g = g / count;
+			average->b = b / count;
+			average->userdata = 1;
+		} else {
+			average->r = average->g = average->b = average->userdata = 0;
+		}
+	}
+	return count;
+}
+
+int main(int argc, char* argv[]) {
+	image_t *img, *mask_img;
+	work_t *current_work, *next_work, *tmp;
+	size_t current_work_size, next_work_size, i;
+	uint32_t x, y;
+	int invalid_found;
+	int correct_size = 1;
+	int correct_threshold = 3;
 	if (argc < 4) {
 		fprintf(stderr, "Usage: %s input_img mask_img output_img\n",
 			argc > 0 ? argv[0] : "gazou_mawari_tubusu");
 		return 1;
 	}
 	img = load_image(argv[1]);
-	next_img = load_image(argv[2]);
-	if (img == NULL || next_img == NULL) {
+	mask_img = load_image(argv[2]);
+	if (img == NULL || mask_img == NULL) {
 		fprintf(stderr, "failed to load image(s)\n");
 		free_image(img);
-		free_image(next_img);
+		free_image(mask_img);
 		return 1;
 	}
-	if (img->width != next_img->width || img->height != next_img->height) {
+	if (img->width != mask_img->width || img->height != mask_img->height) {
 		fprintf(stderr, "size of input and mask image mismatch\n");
 		free_image(img);
-		free_image(next_img);
+		free_image(mask_img);
+		return 1;
+	}
+	if ((current_work = malloc(sizeof(work_t) * img->width * img->height)) == NULL ||
+	(next_work = malloc(sizeof(work_t) * img->width * img->height)) == NULL) {
+		fprintf(stderr, "work buffer allocate failed\n");
+		free_image(img);
+		free_image(mask_img);
+		free(current_work);
+		free(next_work);
 		return 1;
 	}
 	for (y = 0; y < img->height; y++) {
 		for (x = 0; x < img->width; x++) {
-			rgb_t mask_pixel = next_img->image[y * next_img->width + x];
-			img->image[y * img->width + x].userdata =
-				(mask_pixel.r + mask_pixel.g + mask_pixel.b >= 128 * 3);
+			rgb_t mask_pixel = mask_img->image[y * mask_img->width + x];
+			mask_img->image[y * mask_img->width + x].userdata =
+				img->image[y * img->width + x].userdata =
+					(mask_pixel.r + mask_pixel.g + mask_pixel.b >= 128 * 3);
 		}
 	}
-	do {
-		progress = 0;
-		invalid_found = 0;
-		for (y = 0; y < img->height; y++) {
-			for (x = 0; x < img->width; x++) {
-				if (img->image[y * img->width + x].userdata) {
-					next_img->image[y * next_img->width + x] = img->image[y * img->width + x];
-				} else {
-					int dy, dx;
-					int valid_count = 0, r = 0, g = 0, b = 0;
-					rgb_t next_px;
-					for (dy = -1; dy <= 1; dy++) {
-						if ((y == 0 && dy < 0) || y + dy >= img->height) continue;
-						for (dx = -1; dx <= 1; dx++) {
-							rgb_t px;
-							if ((x == 0 && dx < 0) || x + dx >= img->width) continue;
-							if ((px = img->image[(y + dy) * img->width + (x + dx)]).userdata) {
-								valid_count++;
-								r += px.r;
-								g += px.g;
-								b += px.b;
-							}
-						}
+	next_work_size = 0;
+	for (y = 0; y < img->height; y++) {
+		for (x = 0; x < img->width; x++) {
+			if (!mask_img->image[y * mask_img->width + x].userdata &&
+			get_valid_colors(img, NULL, x, y, correct_size) >= correct_threshold) {
+				mask_img->image[y * mask_img->width + x].userdata = 1;
+				next_work[next_work_size].x = x;
+				next_work[next_work_size].y = y;
+				next_work_size++;
+			}
+		}
+	}
+	while (next_work_size > 0) {
+		tmp = current_work;
+		current_work = next_work;
+		next_work = tmp;
+		current_work_size = next_work_size;
+		next_work_size = 0;
+		for (i = 0; i < current_work_size; i++) {
+			get_valid_colors(img, &current_work[i].next_color,
+				current_work[i].x, current_work[i].y, correct_size);
+		}
+		for (i = 0; i < current_work_size; i++) {
+			img->image[current_work[i].y * img->width + current_work[i].x] = current_work[i].next_color;
+		}
+		for (i = 0; i < current_work_size; i++) {
+			int dx, dy;
+			x = current_work[i].x;
+			y = current_work[i].y;
+			for (dy = -1; dy <= 1; dy++) {
+				if ((dy < 0 && y < (unsigned int)-dy) || img->height <= y + dy) continue;
+				for (dx = -1; dx <= 1; dx++) {
+					if ((dx < 0 && x < (unsigned int)-dx) || img->width <= x + dx) continue;
+					if (!mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata &&
+					get_valid_colors(img, NULL, x + dx, y + dy, correct_size) >= correct_threshold) {
+						mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata = 1;
+						next_work[next_work_size].x = x + dx;
+						next_work[next_work_size].y = y + dy;
+						next_work_size++;
 					}
-					if (valid_count >= 3) {
-						next_px.r = r / valid_count;
-						next_px.g = g / valid_count;
-						next_px.b = b / valid_count;
-						next_px.userdata = 1;
-						progress = 1;
-					} else {
-						next_px.r = next_px.g = next_px.b = next_px.userdata = 0;
-						invalid_found = 1;
-					}
-					next_img->image[y * next_img->width + x] = next_px;
 				}
 			}
 		}
-		tmp = img;
-		img = next_img;
-		next_img = tmp;
-	} while (progress);
+	}
+	invalid_found = 0;
+	for (y = 0; y < img->height; y++) {
+		for (x = 0; x < img->width; x++) {
+			if (!img->image[y * img->width + x].userdata) invalid_found = 1;
+		}
+	}
 	if (invalid_found) {
 		fprintf(stderr, "warning: there are some invalid pixels left!\n");
 	}
@@ -82,6 +138,8 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "failed to save image\n");
 	}
 	free_image(img);
-	free_image(next_img);
+	free_image(mask_img);
+	free(current_work);
+	free(next_work);
 	return 0;
 }
