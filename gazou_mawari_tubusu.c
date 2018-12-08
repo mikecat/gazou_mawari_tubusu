@@ -44,11 +44,16 @@ int main(int argc, char* argv[]) {
 	uint32_t x, y;
 	int invalid_found;
 	int correct_size = 1;
-	int correct_threshold = 3;
 	if (argc < 4) {
-		fprintf(stderr, "Usage: %s input_img mask_img output_img\n",
+		fprintf(stderr, "Usage: %s input_img mask_img output_img [correct_size]\n",
 			argc > 0 ? argv[0] : "gazou_mawari_tubusu");
 		return 1;
+	}
+	if (argc >= 5) {
+		if ((correct_size = atoi(argv[4])) <= 0) {
+			fprintf(stderr, "correct_size must be positive\n");
+			return 1;
+		}
 	}
 	img = load_image(argv[1]);
 	mask_img = load_image(argv[2]);
@@ -85,7 +90,7 @@ int main(int argc, char* argv[]) {
 	for (y = 0; y < img->height; y++) {
 		for (x = 0; x < img->width; x++) {
 			if (!mask_img->image[y * mask_img->width + x].userdata &&
-			get_valid_colors(img, NULL, x, y, correct_size) >= correct_threshold) {
+			get_valid_colors(img, NULL, x, y, correct_size) > 0) {
 				mask_img->image[y * mask_img->width + x].userdata = 1;
 				next_work[next_work_size].x = x;
 				next_work[next_work_size].y = y;
@@ -115,7 +120,7 @@ int main(int argc, char* argv[]) {
 				for (dx = -1; dx <= 1; dx++) {
 					if ((dx < 0 && x < (unsigned int)-dx) || img->width <= x + dx) continue;
 					if (!mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata &&
-					get_valid_colors(img, NULL, x + dx, y + dy, correct_size) >= correct_threshold) {
+					get_valid_colors(img, NULL, x + dx, y + dy, correct_size) > 0) {
 						mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata = 1;
 						next_work[next_work_size].x = x + dx;
 						next_work[next_work_size].y = y + dy;
