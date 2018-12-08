@@ -1,6 +1,6 @@
 CC=gcc
-CFLAGS=-O2 -Wall -Wextra -std=c99 -pedantic
-LDFLAGS=-static
+CFLAGS=-O2 -Wall -Wextra -std=c99 -pedantic -fopenmp
+LDFLAGS=-fopenmp
 LIBS=-lpng16 -lz -ljpeg
 
 TARGET=gazou_mawari_tubusu

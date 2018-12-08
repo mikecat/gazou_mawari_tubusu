@@ -78,6 +78,9 @@ int main(int argc, char* argv[]) {
 		free(next_work);
 		return 1;
 	}
+	#ifdef _OPENMP
+	#pragma omp parallel for collapse(2)
+	#endif
 	for (y = 0; y < img->height; y++) {
 		for (x = 0; x < img->width; x++) {
 			rgb_t mask_pixel = mask_img->image[y * mask_img->width + x];
@@ -87,14 +90,23 @@ int main(int argc, char* argv[]) {
 		}
 	}
 	next_work_size = 0;
+	#ifdef _OPENMP
+	#pragma omp parallel for collapse(2)
+	#endif
 	for (y = 0; y < img->height; y++) {
 		for (x = 0; x < img->width; x++) {
 			if (!mask_img->image[y * mask_img->width + x].userdata &&
 			get_valid_colors(img, NULL, x, y, correct_size) > 0) {
+				size_t work_index;
 				mask_img->image[y * mask_img->width + x].userdata = 1;
-				next_work[next_work_size].x = x;
-				next_work[next_work_size].y = y;
-				next_work_size++;
+				#ifdef _OPENMP
+				#pragma omp critical
+				#endif
+				{
+					work_index = next_work_size++;
+				}
+				next_work[work_index].x = x;
+				next_work[work_index].y = y;
 			}
 		}
 	}
@@ -104,33 +116,56 @@ int main(int argc, char* argv[]) {
 		next_work = tmp;
 		current_work_size = next_work_size;
 		next_work_size = 0;
-		for (i = 0; i < current_work_size; i++) {
-			get_valid_colors(img, &current_work[i].next_color,
-				current_work[i].x, current_work[i].y, correct_size);
-		}
-		for (i = 0; i < current_work_size; i++) {
-			img->image[current_work[i].y * img->width + current_work[i].x] = current_work[i].next_color;
-		}
-		for (i = 0; i < current_work_size; i++) {
-			int dx, dy;
-			x = current_work[i].x;
-			y = current_work[i].y;
-			for (dy = -1; dy <= 1; dy++) {
-				if ((dy < 0 && y < (unsigned int)-dy) || img->height <= y + dy) continue;
-				for (dx = -1; dx <= 1; dx++) {
-					if ((dx < 0 && x < (unsigned int)-dx) || img->width <= x + dx) continue;
-					if (!mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata &&
-					get_valid_colors(img, NULL, x + dx, y + dy, correct_size) > 0) {
-						mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata = 1;
-						next_work[next_work_size].x = x + dx;
-						next_work[next_work_size].y = y + dy;
-						next_work_size++;
+		#ifdef _OPENMP
+		#pragma omp parallel
+		#endif
+		{
+			#ifdef _OPENMP
+			#pragma omp for
+			#endif
+			for (i = 0; i < current_work_size; i++) {
+				get_valid_colors(img, &current_work[i].next_color,
+					current_work[i].x, current_work[i].y, correct_size);
+			}
+			#ifdef _OPENMP
+			#pragma omp for
+			#endif
+			for (i = 0; i < current_work_size; i++) {
+				img->image[current_work[i].y * img->width + current_work[i].x] = current_work[i].next_color;
+			}
+			#ifdef _OPENMP
+			#pragma omp for private(x, y)
+			#endif
+			for (i = 0; i < current_work_size; i++) {
+				int dx, dy;
+				x = current_work[i].x;
+				y = current_work[i].y;
+				for (dy = -1; dy <= 1; dy++) {
+					if ((dy < 0 && y < (unsigned int)-dy) || img->height <= y + dy) continue;
+					for (dx = -1; dx <= 1; dx++) {
+						if ((dx < 0 && x < (unsigned int)-dx) || img->width <= x + dx) continue;
+						if (!mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata &&
+						get_valid_colors(img, NULL, x + dx, y + dy, correct_size) > 0) {
+							size_t work_index;
+							mask_img->image[(y + dy) * mask_img->width + (x + dx)].userdata = 1;
+							#ifdef _OPENMP
+							#pragma omp critical
+							#endif
+							{
+								work_index = next_work_size++;
+							}
+							next_work[work_index].x = x + dx;
+							next_work[work_index].y = y + dy;
+						}
 					}
 				}
 			}
 		}
 	}
 	invalid_found = 0;
+	#ifdef _OPENMP
+	#pragma omp parallel for collapse(2)
+	#endif
 	for (y = 0; y < img->height; y++) {
 		for (x = 0; x < img->width; x++) {
 			if (!img->image[y * img->width + x].userdata) invalid_found = 1;
